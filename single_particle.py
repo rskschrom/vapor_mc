@@ -2,6 +2,13 @@ import numpy as np
 from scipy import integrate
 from scipy.special import ellipkinc, ellipeinc
 
+def maxwell_mixing(rho_snow, eps_ice):
+    # estimate refractive index (Maxwell-Garnett)
+    rho_ice = 920.
+    eps_fac = (eps_ice-1.)/(eps_ice+2.)
+    eps_snow = (1.+2.*rho_snow/rho_ice*eps_fac)/(1.-rho_snow/rho_ice*eps_fac)
+    return eps_snow
+
 # calculate ellipsoid shape factors with elliptical integrals
 def ellipsoid_shape_func(a, b, c):
     phi = np.arccos(c/a)
