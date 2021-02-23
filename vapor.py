@@ -17,16 +17,11 @@ def dvoldt(vol, phi, tmpk, si, pres):
     vol_ch = 4.*np.pi*mi.capac(a,c)*si*th.g_diff(tmpk, pres, si, rad)/rhod
     return vol_ch, vol_ch*rhod
 
-# aspect ratio change
-def dphidt(vol, phi):
-    gam = 0.28
-    dphidt = phi/vol*(gam-1.)/(gam+2.)
-    return dphidt
-
 # a- and c-volume changes
-def dvolacdt(vola, volc, tmpk, si, pres, gam):
+def dvolacdt(vola, volc, tmpk, si, pres):
     #vola = vola_max[~vola_max.mask]
     #volc = volc_max[~volc_max.mask]
+    gam = mi.igr(tmpk)
     vola_ch, mass_ch = dvoldt(vola, volc/vola, tmpk, si, pres)
     volc_ch = volc/vola*vola_ch*(2.*gam+1.)/(gam+2.)
     return vola_ch, volc_ch, mass_ch

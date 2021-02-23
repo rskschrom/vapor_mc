@@ -3,10 +3,11 @@ import vapor as va
 import single_particle as sp
 import forward as fo
 import micro as mi
+import thermo as th
+from init import interp_sounding
 import matplotlib as mpl
 import matplotlib.colors as cm
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 # function for creating color map
 def createCmap(mapname):
@@ -18,74 +19,144 @@ def createCmap(mapname):
     fil.close()
     return cmap
 
-# set initial particle properties
+# set model run parameters
 nt = 3600
-dt = 1.
-npar_max = 5000
+nbin = 31
+npar_max = 10000
 npar_init = 2000
-lea = 0.
+nscale = 5000.
+dt = 1.
+dz = 100.
+ze = np.arange(nbin+1)*dz
 
-gam = 0.28
-z0 = 800.
+# set radar parameters
+wavl = 32.1
+k = 2.*np.pi/wavl
+diel = 3.17+1j*0.009
+bval = 51.
+rad_freq = 20
+nprof = int(nt/rad_freq)
+
+# set initial particle properties
+#gam = 0.28
+z0 = 1500.
+zvar = 250.
 vola = np.zeros([npar_max])
 volc = np.zeros([npar_max])
 z = np.zeros([npar_max])
+tmpk = np.full([npar_max], 258.)
+si = np.full([npar_max], 0.15)
+pres = np.full([npar_max], 85000.)
+
+# particle mask
 parm = np.zeros([npar_max], dtype=np.bool_)
 parm[:npar_init] = 1
+
+# randomly sample initial particle properties
 res = 10.**np.random.multivariate_normal([-13.5,-13.5],
                                           [[0.2,0.0],
                                            [0.0,0.2]], size=(npar_init))
-#vola[:,0] = res[:,0]
-#volc[:,0] = res[:,1]
 vola[:npar_init] = res[:,0]
 volc[:npar_init] = res[:,1]
-z[:npar_init] = np.random.normal(z0, 100., size=npar_init)
-
-# set conditions at each particle
-tmpk = np.full(npar_max, 258.15)
-si = np.full(npar_max, 0.15)
-pres = 85000.
+z[:npar_init] = np.random.normal(z0, zvar, size=npar_init)
 
 # forward model coefficients
 data = np.genfromtxt('coeffs/spheroid_coeff.txt', skip_header=1)
 pd_coeffs = data[:,0]
 ph_coeffs = data[:,1]
 
-# radar parameters
-wavl = 32.1
-k = 2.*np.pi/wavl
-diel = 3.17+1j*0.009
-bval = 51.
-
-nbin = 61
-dz = 50.
-beam_width_z = 100.
-ze = np.arange(nbin+1)*dz
-nscale = 500.
-rad_freq = 20
-nprof = int(nt/rad_freq)
-
+# output variables
+lea = 0.
 zloc = np.empty([nprof,nbin])
 zh = np.empty([nprof,nbin])
 zdr = np.empty([nprof,nbin])
 kdp = np.empty([nprof,nbin])
 rhohv = np.empty([nprof,nbin])
 mdv = np.empty([nprof,nbin])
+tmpk2d = np.empty([nprof,nbin])
+si2d = np.empty([nprof,nbin])
 
-#zh[0,:], zdr[0,:], kdp[0,:], rhohv[0,:] = fo.radar(vola[:,0], volc[:,0], wavl, diel, bval)
+# set initial thermodynamic state from sounding
+#fsnd = 'obs/sounding_20180223_4.txt'
+fsnd = 'obs/sounding_20180304_2.txt'
+#zoffs = 1000.
+zoffs = 3800.
+pres_bin, tmpk_bin, si_bin = interp_sounding(fsnd, ze+zoffs)
+print(pres_bin)
+print(tmpk_bin)
+print(si_bin)
+#si_bin = th.svp_liq(tmpk_bin)/th.svp_ice(tmpk_bin)-1.
+
+'''
+# test sounding interpolation
+data = np.genfromtxt(fsnd, skip_header=1)
+psnd = data[:,0]
+tsnd = data[:,1]
+zsnd = data[:,5]
+plt.plot(tmpk_bin, 0.5*(ze[:-1]+ze[1:])+zoffs, 'k-', lw=3., alpha=0.3)
+plt.plot(tsnd, zsnd, 'r-', lw=3., alpha=0.3)
+ax = plt.gca()
+ax.set_ylim([0., 4000.])
+plt.savefig('test_snd.png')
+'''
+# set conditions at each particle
+bin_inds = np.digitize(z[:npar_init], ze)-1
+
+for j in range(nbin):
+    pres[:npar_init][bin_inds==j] = pres_bin[j]
+    tmpk[:npar_init][bin_inds==j] = tmpk_bin[j]
+    si[:npar_init][bin_inds==j] = si_bin[j]
 
 # integrate model
 for i in range(nt-1):
-    print(i, np.sum(parm), lea)
-    dvadt, dvcdt, dmdt = va.dvolacdt(vola, volc, tmpk, si, pres, gam)
+    print(f'time step: {i:d} num. particles: {np.sum(parm):d} lprecip (in.): {lea:.2e} tmp12: {tmpk_bin[12]:.3f} si12: {si_bin[12]:.4f}')
+    dvadt, dvcdt, dmdt = va.dvolacdt(vola, volc, tmpk, si, pres)
     vola_new = vola+dt*dvadt
     volc_new = volc+dt*dvcdt
     vt = mi.fall_speed(vola, volc)
     z = z-dt*vt
 
+    # remove very small particles for negative si
+    parm[(si<0.)&(vola_new<1.e-16)] = 0
+    parm[(si<0.)&(volc_new<1.e-16)] = 0
+
+    # accumulate particles at surface and mask/remove
+    a = (3.*vola[z<0.]**2./(4.*np.pi*volc[z<0.]))**(1./3.)
+    rhoe = mi.rhodep(a, 0.1, 0.4, 0.6, 0.7, 920.)
+    lea = lea+np.sum(vola[z<0.]*rhoe)/25.4
+    parm[z<0.] = 0
+
     # advance to next step
     vola = vola_new
     volc = volc_new
+
+    # adjust thermodynamic environment (binned appx.)
+    dmdt_valid = dmdt[parm]
+    tmpk_valid = tmpk[parm]
+    si_valid = si[parm]
+    z_valid = z[parm]
+    pres_valid = pres[parm]
+    bin_inds = np.digitize(z[parm], ze)-1
+    
+    mass_ch_bin = np.zeros([nbin])
+    for j in range(nbin):
+        # adjust temp and humidity based on vapor growth
+        rho_vap = th.svp_ice(tmpk_bin[j])*(si_bin[j]+1.)/(462.*tmpk_bin[j])
+        mass_change = np.sum(dmdt_valid[bin_inds==j]*nscale*dt/dz)
+        mass_ch_bin[j] = mass_change
+        #if len(z_valid[bin_inds==j])>0:
+        #    print(np.min(z_valid[bin_inds==j]), np.max(z_valid[bin_inds==j]), ze[j], ze[j+1])
+        new_rho_vap = rho_vap-mass_change
+        tmpk_bin[j] = tmpk_bin[j]+th.lheat_sub(tmpk_bin[j])/1.8e-2*mass_change/(pres_bin[j]/(287.*tmpk_bin[j]))/1004.
+        si_bin[j] = 462.*tmpk_bin[j]*new_rho_vap/th.svp_ice(tmpk_bin[j])-1.
+
+        # set all particles within bin to new bin thermo state
+        tmpk_valid[bin_inds==j] = tmpk_bin[j]
+        si_valid[bin_inds==j] = si_bin[j]
+        pres_valid[bin_inds==j] = pres_bin[j]
+        tmpk[parm] = tmpk_valid
+        si[parm] = si_valid
+        pres[parm] = pres_valid
 
     # simulate radar variables
     if (i % rad_freq)==0:
@@ -95,9 +166,14 @@ for i in range(nt-1):
                                                                                  z[parm],
                                                                                  vt[parm],
                                                                                  wavl, diel, bval,
-                                                                                 ze, beam_width_z, nscale,
+                                                                                 ze, nscale,
                                                                                  pd_coeffs, ph_coeffs)
         print(zh[pi,:])
+        #print(tmpk_bin)
+        #print(si_bin)
+        #print(mass_ch_bin)
+        tmpk2d[pi,:] = tmpk_bin
+        si2d[pi,:] = si_bin
 
     # nucleate new ice
     res = 10.**np.random.multivariate_normal([-13.,-13.],
@@ -106,18 +182,16 @@ for i in range(nt-1):
     rnd_ind = np.random.choice(np.arange(npar_max)[parm==0])
     vola[rnd_ind] = res[:,0]
     volc[rnd_ind] = res[:,1]
-    z[rnd_ind] = np.random.normal(z0, 100., size=1)
+    z[rnd_ind] = np.random.normal(z0, zvar, size=1)
     parm[rnd_ind] = 1
-
-    # accumulate particles at surface and mask/remove
-    a = (3.*vola[z<0.]**2./(4.*np.pi*volc[z<0.]))**(1./3.)
-    rhoe = mi.rhodep(a, 0.1, 0.4, 0.6, 0.7, 920.)
-    lea = lea+np.sum(vola[z<0.]*rhoe)/25.4
-    parm[z<0.] = 0
+    bins_new = np.digitize(z[rnd_ind], ze)-1
+    tmpk[rnd_ind] = tmpk_bin[bins_new]
+    si[rnd_ind] = si_bin[bins_new]
+    #print(tmpk[rnd_ind], si[rnd_ind])
 
 # plot
 #----------------------------------
-fig = plt.figure(figsize=(16,12))
+fig = plt.figure(figsize=(12,12))
 
 # color map stuff
 zh_map = createCmap('zh2_map')
@@ -148,6 +222,12 @@ fmt_int = mpl.ticker.StrMethodFormatter('{x:.0f}')
 #---------------------------------------------------------------
 ax = fig.add_subplot(5,1,1)
 plt.pcolormesh(t2d, z2d, zh, cmap=zh_map, vmin=-40., vmax=20.)
+cs2 = ax.contour(tcnt2d, zcnt2d, tmpk2d-273.15, levels=[-20.,-15.,-10.], linewidths=2., linestyles='-.', colors='k')
+cs3 = ax.contour(tcnt2d, zcnt2d, si2d*100., levels=[5.,10.,15.], linewidths=2., linestyles='--', colors='b')
+
+ax.clabel(cs2, inline=1, fontsize=12, fmt='%3.0f')
+ax.clabel(cs3, inline=1, fontsize=12, fmt='%2.0f')
+
 ax.set_ylabel('height (m)', fontsize=16)
 ax.set_title('$Z_{H}$', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_null)
@@ -192,7 +272,7 @@ plt.pcolormesh(t2d, z2d, rhohv, cmap=rhv_map, vmin=0.71, vmax=1.05)
 #ax.set_xlabel('time (seconds)', fontsize=16)
 ax.set_ylabel('height (m)', fontsize=16)
 ax.set_title('$\\rho_{HV}$', fontsize=18, x=0., y=1.02, ha='left')
-ax.xaxis.set_major_formatter(fmt_int)
+ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 

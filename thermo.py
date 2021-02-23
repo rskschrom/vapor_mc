@@ -3,10 +3,7 @@ import numpy as np
 # Murphy + Koop (2005) RMET (Pa; T > 100 K)
 def svp_ice(tmpk):
     svp_ice = np.exp(9.550426-5723.265/tmpk+3.53068*np.log(tmpk)-0.00728332*tmpk)
-    return svp_ice
-
-        
-   
+    return svp_ice   
 
 # Murphy + Koop (2005) RMET (Pa; 332 K > T > 123 K)
 def svp_liq(tmpk):

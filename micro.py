@@ -1,5 +1,24 @@
 import numpy as np
 
+# inherent growth ratio (rough fit to Chen and Lamb [1994])
+def igr(tmpk):
+    tmpc = tmpk-273.15
+    '''
+    igr = np.piecewise(tmpc, [tmpc<-30., (tmpc>=-30.)&(tmpc<-23.),
+                              (tmpc>=-23.)&(tmpc<-15.),
+                              (tmpc>=-15.)&(tmpc<-7.),
+                              (tmpc>=-7.)&(tmpc<-4.),
+                              (tmpc>=-4.)&(tmpc<=0.), tmpc>0.],
+                             [1.1, 1.1*(-23.-tmpc)/7.+2.*(tmpc+30.)/7.,
+                              2.*(-15.-tmpc)/8.+0.28*(tmpc+23.)/8.,
+                              0.28*(-7.-tmpc)/8.+2.1*(tmpc+15.)/8.,
+                              2.1*(-4.-tmpc)/3.+0.75*(tmpc+7.)/3.,
+                              0.75*(0.-tmpc)/4.+1.*(tmpc+4.)/4., 1.])
+    '''
+    igr = np.piecewise(tmpc, [tmpc<-30.,(tmpc>=-30)&(tmpc<-20.),(tmpc>=-20)&(tmpc<=0.),tmpc>0.],
+                             [1.1,0.8,0.5,1.])
+    return igr
+
 # fall speed
 def fall_speed(vola, volc):
     rhoi = 920.

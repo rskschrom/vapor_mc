@@ -96,7 +96,7 @@ def radar_scat(vola, volc, wavl, diel, bval, pdc, phc):
     return sig_hh, sig_vv, kdp, cov_hhvv
 
 # simulate radar profile using beam weighting function
-def radar_column(vola, volc, zpar, vt, wavl, diel, bval, zedges, beam_width_z, nscale, pdc, phc):
+def radar_column(vola, volc, zpar, vt, wavl, diel, bval, zedges, nscale, pdc, phc):
     # individual particle scattering properties
     sig_hh, sig_vv, kdp_par, cov_hhvv = radar_scat(vola, volc, wavl, diel, bval, pdc, phc)
     shh2 = sig_hh/(4.*np.pi)
