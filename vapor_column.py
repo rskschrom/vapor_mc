@@ -20,7 +20,7 @@ def createCmap(mapname):
     return cmap
 
 # set model run parameters
-nt = 3600
+nt = 7200
 nbin = 31
 npar_max = 10000
 npar_init = 2000
@@ -39,8 +39,8 @@ nprof = int(nt/rad_freq)
 
 # set initial particle properties
 #gam = 0.28
-z0 = 1500.
-zvar = 250.
+z0 = 2500.
+zvar = 100.
 vola = np.zeros([npar_max])
 volc = np.zeros([npar_max])
 z = np.zeros([npar_max])
