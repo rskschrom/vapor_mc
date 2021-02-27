@@ -132,6 +132,62 @@ def radar_column(vola, volc, zpar, vt, wavl, diel, bval, zedges, nscale, pdc, ph
     zdr = 10.*np.log10(zhh/zvv)
 
     return zh, zdr, kdp, rhohv, mdv
+    
+# simulate radar profile with aggregates
+def radar_agg(pr_props, agg_props, wavl, diel, bval, zedges, nscale, pdc, phc):
+    # individual particle scattering properties for pristine
+    vola = pr_props[0]
+    volc = pr_props[1]
+    zpar = pr_props[2]
+    vt = pr_props[3]
+    sig_hh, sig_vv, kdp_par, cov_hhvv = radar_scat(vola, volc, wavl, diel, bval, pdc, phc)
+    shh2 = sig_hh/(4.*np.pi)
+    svv2 = sig_vv/(4.*np.pi)
+    
+    # individual particle scattering properties for aggregates
+    mass_agg = agg_props[0]
+    zagg = agg_props[1]
+    vt_agg = agg_props[2]
+    sig_hh_agg, sig_vv_agg, kdp_agg, cov_hhvv_agg = radar_scat(mass_agg/100., mass_agg/100., wavl, diel, bval, pdc, phc)
+    shh2_agg = sig_hh_agg/(4.*np.pi)
+    svv2_agg = sig_vv_agg/(4.*np.pi)
+
+    # calculate radar vertical bins
+    zcen = 0.5*(zedges[1:]+zedges[:-1])
+    nbin = len(zcen)
+
+    # integrate radar variables at each bin
+    zhh = np.empty([nbin])
+    zvv = np.empty([nbin])
+    kdp = np.empty([nbin])
+    rhohv = np.empty([nbin])
+    mdv = np.empty([nbin])
+
+    dz = zedges[1]-zedges[0]
+
+    for i in range(nbin):
+        #wgt = np.exp(-4.*np.log(2.)*(zcen[i]-zpar)**2./(beam_width_z)**2.)
+        #wgt = nscale*wgt/(beam_width_z**2.*np.pi/(16.*np.log(2.)))
+        wgt = np.piecewise(zpar, [zpar<zedges[i],(zpar>=zedges[i])&(zpar<=zedges[i+1]),
+                           zpar>zedges[i+1]],
+                           [0.,1.,0.])*nscale/dz
+        wgt_agg = np.piecewise(zagg, [zagg<zedges[i],(zagg>=zedges[i])&(zagg<=zedges[i+1]),
+                               zagg>zedges[i+1]],
+                               [0.,1.,0.])*nscale/dz
+        #wgt = nscale*wgt/(beam_width_z**2.*np.pi/(16.*np.log(2.)))
+        zhh[i] = wavl**4./(np.pi**5*0.93)*(np.sum(wgt*sig_hh)+np.sum(wgt_agg*sig_hh_agg))
+        zvv[i] = wavl**4./(np.pi**5*0.93)*(np.sum(wgt*sig_vv)+np.sum(wgt_agg*sig_vv_agg))
+        kdp[i] = np.sum(wgt*kdp_par)+np.sum(wgt_agg*kdp_agg)
+        rhohv[i] = np.abs(np.sum(wgt*cov_hhvv)+np.sum(wgt_agg*cov_hhvv_agg))
+        rhohv[i] = rhohv[i]/np.sqrt((np.sum(wgt*shh2)+np.sum(wgt_agg*shh2_agg))*
+                                    (np.sum(wgt*svv2)+np.sum(wgt_agg*svv2_agg)))
+        mdv[i] = -(np.sum(wgt*vt*sig_hh)+np.sum(wgt_agg*vt_agg*sig_hh_agg))/\
+                  (np.sum(wgt*sig_hh)+np.sum(wgt_agg*sig_hh_agg))
+
+    zh = 10.*np.log10(zhh)
+    zdr = 10.*np.log10(zhh/zvv)
+
+    return zh, zdr, kdp, rhohv, mdv
 
 # radar forward model for box model
 def radar(vola, volc, wavl, diel, bval):

@@ -24,7 +24,7 @@ def fall_speed(vola, volc):
     a = (3.*vola/(4.*np.pi*volc/vola))**(1./3.)
     c = a*volc/vola
 
-    area[vola>volc] = np.pi*a[vola>volc]**2.
+    area[vola>=volc] = np.pi*a[vola>=volc]**2.
     area[vola<volc] = np.pi*a[vola<volc]*c[vola<volc]
     av = 0.6
     bv = 0.3
