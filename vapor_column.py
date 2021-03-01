@@ -20,7 +20,7 @@ def createCmap(mapname):
     return cmap
 
 # set model run parameters
-nt = 3600
+nt = 7200
 nbin = 31
 npar_max = 10000
 npar_init = 2000
@@ -47,6 +47,9 @@ volc = np.zeros([npar_max])
 z = np.zeros([npar_max])
 zagg = np.zeros([nagg_max])
 mass_agg = np.zeros([nagg_max])
+
+rho_agg = 100.
+eff_agg = 0.3
 
 tmpk = np.full([npar_max], 258.)
 si = np.full([npar_max], 0.15)
@@ -104,16 +107,14 @@ for j in range(nbin):
 
 # integrate model
 for i in range(nt-1):
-    print(f'time step: {i:d} num. particles: {np.sum(parm):d} lprecip (in.): {lea:.2e} tmp12: {tmpk_bin[12]:.3f} si12: {si_bin[12]:.4f}')
+    print(f'time step: {i:d} num. pristine: {np.sum(parm):d}'+
+          f' num. aggregate: {np.sum(aggm):d} lprecip (in.): {lea:.2e}'+
+          f' tmp12: {tmpk_bin[12]:.3f} si12: {si_bin[12]:.4f}')
     dvadt, dvcdt, dmdt = va.dvolacdt(vola, volc, tmpk, si, pres)
     vola_new = vola+dt*dvadt
     volc_new = volc+dt*dvcdt
     vt = mi.fall_speed(vola, volc)
     z = z-dt*vt
-    
-    # aggregate fall speeds (simple for now)
-    vt_agg = mi.fall_speed(mass_agg/100., mass_agg/100.)
-    zagg = zagg-dt*vt_agg
 
     # remove very small particles for negative si
     parm[(si<0.)&(vola_new<1.e-16)] = 0
@@ -124,7 +125,6 @@ for i in range(nt-1):
     rhoe = mi.rhodep(a, 0.1, 0.4, 0.6, 0.7, 920.)
     lea = lea+np.sum(vola[z<0.]*rhoe)/25.4
     parm[z<0.] = 0
-    aggm[zagg<0.] = 0
 
     # advance to next step
     vola = vola_new
@@ -161,14 +161,16 @@ for i in range(nt-1):
         si[parm] = si_valid
         pres[parm] = pres_valid
         
-        # collection of pristine by aggregates
+        # collection of pristine by pristine
         nj = np.sum(parm_valid[bin_inds==j])
         vt_mn = np.mean(vt_valid[bin_inds==j])
         rad_mn = np.mean(((3.*vola_valid[bin_inds==j])/(4.*np.pi))**(1./3.))
         tau_bin[j] = 1./(4.*np.pi*nj*nscale/dz*vt_mn*rad_mn**2.)
         ncol_bin[j] = nj*nscale*(1.-np.exp(-1./tau_bin[j]))
-        nagg_exp = ncol_bin[j]/nscale
-        if not isnan(nagg_exp): 
+        nagg_exp = eff_agg*ncol_bin[j]/nscale
+        
+        if not isnan(nagg_exp):
+            # random sampling for fractional expected # of collisions
             nagg_sam = int(int(nagg_exp)+np.heaviside(nagg_exp-np.random.rand(), 1.))
             if nagg_sam>0:
                 # add aggregates to array
@@ -176,37 +178,46 @@ for i in range(nt-1):
                 aggm[arnd_ind] = 1
                 zagg[arnd_ind] = np.random.rand()*dz+ze[j]
                 
-                # remove pristine pairs
+                # choose pristine crystals to aggregate
                 parm_bin = parm_valid[bin_inds==j]
                 vola_bin = vola_valid[bin_inds==j]
                 volc_bin = volc_valid[bin_inds==j]
-                prnd_ind = np.random.choice(np.arange(np.sum(parm_bin)), size=2*nagg_sam)
-                parm_bin[prnd_ind] = 0
-                parm_valid[bin_inds==j] = parm_bin
-                
-                # calculate aggregate physical properties from pristines
                 a = 1.e3*(3.*vola_bin/(4.*np.pi*volc_bin/vola_bin))**(1./3.)
                 c = a*volc_bin/vola_bin
                 rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
-                mass_par = (rhoe[prnd_ind]*vola_bin[prnd_ind])
-                mass_agg[arnd_ind] = mass_par[:nagg_sam]+mass_par[nagg_sam:]
+                mass_par = (rhoe*vola_bin)
                 
+                # favor larger sizes as the "aggregator", random for "aggregated"
+                npr_bin = np.sum(parm_bin)
+                pind_sample = np.random.choice(np.arange(npr_bin), size=(5,nagg_sam))
+                mass_sample = mass_par[pind_sample]
+                maxind_mass = np.argmax(mass_sample, axis=0)
+                pind_agtr = np.squeeze(pind_sample[maxind_mass,:], axis=0)
+                parm_bin[pind_agtr] = 0
+                
+                pind_agtd = np.random.choice(np.arange(npr_bin)[parm_bin], size=(nagg_sam))
+                parm_bin[pind_agtd] = 0
+                parm_valid[bin_inds==j] = parm_bin
+                
+                # calculate aggregate physical properties from pristines
+                mass_agg[arnd_ind] = mass_par[pind_agtr]+mass_par[pind_agtd]
+                print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
+    
+    # update pristine array mask            
     parm[parm] = parm_valid
+    
+    # aggregate sedimentation (simple for now)
+    vt_agg = mi.fall_speed(mass_agg/rho_agg, mass_agg/rho_agg)
+    zagg = zagg-dt*vt_agg
+    lea = lea+np.sum(mass_agg[zagg<0.])/25.4
+    aggm[zagg<0.] = 0
 
     # simulate radar variables
     if (i % rad_freq)==0:
         pi = int(i/rad_freq)
-        '''
-        zh[pi,:], zdr[pi,:], kdp[pi,:], rhohv[pi,:], mdv[pi,:] = fo.radar_column(vola[parm],
-                                                                                 volc[parm],
-                                                                                 z[parm],
-                                                                                 vt[parm],
-                                                                                 wavl, diel, bval,
-                                                                                 ze, nscale,
-                                                                                 pd_coeffs, ph_coeffs)
-        '''
         par_props = [vola[parm], volc[parm], z[parm], vt[parm]]
-        agg_props = [mass_agg[aggm], zagg[aggm], vt_agg[aggm]]
+        agg_props = [mass_agg[aggm], zagg[aggm], vt_agg[aggm], rho_agg]
+        mass_valid = mass_agg[aggm]
         zh[pi,:], zdr[pi,:], kdp[pi,:], rhohv[pi,:], mdv[pi,:] = fo.radar_agg(par_props, agg_props,
                                                                               wavl, diel, bval,
                                                                               ze, nscale,
@@ -219,6 +230,7 @@ for i in range(nt-1):
         ncol[pi,:] = ncol_bin
         zagg2[pi,:] = zagg
         tagg2[pi,:] = 1.*i
+        
     # nucleate new ice
     res = 10.**np.random.multivariate_normal([-13.,-13.],
                                               [[0.2,0.0],
@@ -319,7 +331,7 @@ ax.set_ylim([0.,3000.])
 cb = plt.colorbar()
 cb.set_label('(deg/km)')
 
-plt.scatter(tagg2[:,::10], zagg2[:,::10], c='k', s=10., alpha=0.3)
+#plt.scatter(tagg2[:,::10], zagg2[:,::10], c='k', s=10., alpha=0.3)
 
 # rhohv
 #---------------------------------------------------------------
@@ -349,4 +361,4 @@ cb = plt.colorbar()
 cb.set_label('(m/s)')
 
 #plt.subplots_adjust(wspace=0.2, hspace=0.3)
-plt.savefig(f'time_height_vapor.png', bbox_inches='tight')
+plt.savefig(f'time_height_vapor_alt.png', bbox_inches='tight')

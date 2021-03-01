@@ -32,9 +32,7 @@ def polz_bpc(diel, pd_coeffs, ph_coeffs, aval, cval, rho):
 
     # near-spherical particles
     sph_ind = (np.abs(cval/aval-1.)<1.e-16)
-    alp_a[sph_ind], alp_b[sph_ind], alp_c[sph_ind] = sp.oblate_polz(eps_snow[sph_ind],
-                                                                    aval[sph_ind],
-                                                                    aval[sph_ind]*1.000001)
+    alp_a[sph_ind], alp_b[sph_ind], alp_c[sph_ind] = sp.sphere_polz(eps_snow[sph_ind], aval[sph_ind])
 
     # prolate particles
     sph_ind = (cval/aval>1.)
@@ -42,36 +40,19 @@ def polz_bpc(diel, pd_coeffs, ph_coeffs, aval, cval, rho):
                                                                      cval[sph_ind], aval[sph_ind])
 
     if np.isnan(np.abs(alp_a)).any():
-        print(aval[np.isnan(np.abs(alp_a))], cval[np.isnan(np.abs(alp_a))])
+        print(aval[np.isnan(np.abs(alp_a))],
+              cval[np.isnan(np.abs(alp_a))],
+              eps_snow[np.isnan(np.abs(alp_a))])
         sys.exit()
 
     return alp_a, alp_b, alp_c
 
 
 # single-scattering radar properties
-def radar_scat(vola, volc, wavl, diel, bval, pdc, phc):
-    # calculate particle properties
-    phi = volc/vola
-    a = 1.e3*(3.*vola/(4.*np.pi*phi))**(1./3.)
-    c = a*phi
-    rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
-
+def radar_scat(a, c, rhoe, wavl, diel, bval, pdc, phc):
     # calculate polarizabilities using rayleigh theory
-    npar = len(a)
     alp_a, alp_b, alp_c = polz_bpc(diel, pdc, phc, a, c, rhoe)
-    '''
-    alp_a = np.empty([npar], dtype=complex)
-    alp_b = np.empty([npar], dtype=complex)
-    alp_c = np.empty([npar], dtype=complex)
-    res = sp.oblate_polz(diel, a[a>c], c[a>c])
-    alp_a[a>c] = res[0]
-    alp_b[a>c] = res[1]
-    alp_c[a>c] = res[2] 
-    res = sp.prolate_polz(diel, c[a<c], a[a<c])
-    alp_a[a<c] = res[0]
-    alp_b[a<c] = res[1]
-    alp_c[a<c] = res[2]
-    '''
+    npar = len(a)
 
     # randomly sample orientations
     alpha = 2.*np.pi*np.random.rand(npar)
@@ -140,15 +121,27 @@ def radar_agg(pr_props, agg_props, wavl, diel, bval, zedges, nscale, pdc, phc):
     volc = pr_props[1]
     zpar = pr_props[2]
     vt = pr_props[3]
-    sig_hh, sig_vv, kdp_par, cov_hhvv = radar_scat(vola, volc, wavl, diel, bval, pdc, phc)
+    
+    # calculate density for pristine
+    phi = volc/vola
+    a = 1.e3*(3.*vola/(4.*np.pi*phi))**(1./3.)
+    c = a*phi
+    rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
+    
+    sig_hh, sig_vv, kdp_par, cov_hhvv = radar_scat(a, c, rhoe, wavl, diel, bval, pdc, phc)
     shh2 = sig_hh/(4.*np.pi)
     svv2 = sig_vv/(4.*np.pi)
-    
+
     # individual particle scattering properties for aggregates
     mass_agg = agg_props[0]
     zagg = agg_props[1]
     vt_agg = agg_props[2]
-    sig_hh_agg, sig_vv_agg, kdp_agg, cov_hhvv_agg = radar_scat(mass_agg/100., mass_agg/100., wavl, diel, bval, pdc, phc)
+    rho_agg = np.full([len(mass_agg)], agg_props[3])
+    phi_agg = np.full([len(mass_agg)], 1.)
+    a_agg = 1.e3*(3.*mass_agg/(4.*np.pi*rho_agg))**(1./3.)
+    c_agg = a_agg*phi_agg
+    sig_hh_agg, sig_vv_agg, kdp_agg, cov_hhvv_agg = radar_scat(a_agg, c_agg, rho_agg,
+                                                               wavl, diel, bval, pdc, phc)
     shh2_agg = sig_hh_agg/(4.*np.pi)
     svv2_agg = sig_vv_agg/(4.*np.pi)
 
@@ -166,15 +159,15 @@ def radar_agg(pr_props, agg_props, wavl, diel, bval, zedges, nscale, pdc, phc):
     dz = zedges[1]-zedges[0]
 
     for i in range(nbin):
-        #wgt = np.exp(-4.*np.log(2.)*(zcen[i]-zpar)**2./(beam_width_z)**2.)
-        #wgt = nscale*wgt/(beam_width_z**2.*np.pi/(16.*np.log(2.)))
+        # perfect binning weigting functions
         wgt = np.piecewise(zpar, [zpar<zedges[i],(zpar>=zedges[i])&(zpar<=zedges[i+1]),
                            zpar>zedges[i+1]],
                            [0.,1.,0.])*nscale/dz
         wgt_agg = np.piecewise(zagg, [zagg<zedges[i],(zagg>=zedges[i])&(zagg<=zedges[i+1]),
                                zagg>zedges[i+1]],
                                [0.,1.,0.])*nscale/dz
-        #wgt = nscale*wgt/(beam_width_z**2.*np.pi/(16.*np.log(2.)))
+                               
+        # radar observables
         zhh[i] = wavl**4./(np.pi**5*0.93)*(np.sum(wgt*sig_hh)+np.sum(wgt_agg*sig_hh_agg))
         zvv[i] = wavl**4./(np.pi**5*0.93)*(np.sum(wgt*sig_vv)+np.sum(wgt_agg*sig_vv_agg))
         kdp[i] = np.sum(wgt*kdp_par)+np.sum(wgt_agg*kdp_agg)

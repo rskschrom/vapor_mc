@@ -57,6 +57,11 @@ def prolate_polz(diel, a, b):
     alph_b = 4./3.*np.pi*b**2.*a*(diel-1.)/(1.+lb*(diel-1.))
 
     return alph_a, alph_b, alph_b
+    
+# sphere (a=b=c) polarizabilities
+def sphere_polz(diel, r):
+    alph = 4.*np.pi*r**3.*(diel-1.)/(diel+2.)
+    return alph, alph, alph
 
 # anisotropic oblate spheroid (a=b>c) polarizabilities
 def ani_oblate_polz(diel_a, diel_c, a, c):
