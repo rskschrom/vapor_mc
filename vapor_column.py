@@ -20,13 +20,13 @@ def createCmap(mapname):
     return cmap
 
 # set model run parameters
-nt = 7200
+nt = 5400
 nbin = 31
-npar_max = 10000
-npar_init = 2000
-nagg_max = 6000
+npar_max = 250000
+npar_init = 100000
+nagg_max = 50000
 
-nscale = 5000.
+nscale = 1000.
 dt = 1.
 dz = 100.
 ze = np.arange(nbin+1)*dz
@@ -181,75 +181,75 @@ for i in range(nt-1):
         
         # aggregation
         #---------------------------------------------------
-        # binned pristine arrays
-        vola_hb = vola_valid[bin_inds==j]
-        volc_hb = volc_valid[bin_inds==j]
-        vt_hb = vt_valid[bin_inds==j]
-        z_hb = z_valid[bin_inds==j]
         parm_hb = parm_valid[bin_inds==j]
-        
-        # get pristine physical properties
-        a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
-        c = a*volc_hb/vola_hb
-        rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
-        mass_par = (rhoe*vola_hb)
-        
-        # binned aggregate arrays
-        massa_hb = massa_valid[bina_inds==j]
-        vta_hb = vta_valid[bina_inds==j]
-        za_hb = za_valid[bina_inds==j]
         aggm_hb = aggm_valid[bina_inds==j]
+        if (np.sum(parm_hb)+np.sum(aggm_hb))>10:
+            # binned pristine arrays
+            vola_hb = vola_valid[bin_inds==j]
+            volc_hb = volc_valid[bin_inds==j]
+            vt_hb = vt_valid[bin_inds==j]
+            z_hb = z_valid[bin_inds==j]
         
-        # number of collisions from statistical mechanics
-        nj = np.sum(parm_hb)+np.sum(aggm_hb)
-        vt_mn = np.mean(np.concatenate((vt_hb, vta_hb)))
-        rad_mn = np.mean(((3.*np.concatenate((vola_hb, massa_hb/rho_agg)))/(4.*np.pi))**(1./3.))
-        tau_bin[j] = 1./(4.*np.pi*nj*nscale/dz*vt_mn*rad_mn**2.)
-        ncol_bin[j] = nj*nscale*(1.-np.exp(-1./tau_bin[j]))
-        nagg_exp = eff_agg*ncol_bin[j]/nscale
-        print(f'fraction of collisions: {nagg_exp:.1f}')
+            # get pristine physical properties
+            a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
+            c = a*volc_hb/vola_hb
+            rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
+            mass_par = (rhoe*vola_hb)
         
-        if not isnan(nagg_exp):
-            # random sampling for fractional expected # of collisions
-            nagg_sam = int(int(nagg_exp)+np.heaviside(nagg_exp-np.random.rand(), 1.))
-            if nagg_sam>0:
-                # get pristine physical properties
-                a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
-                c = a*volc_hb/vola_hb
-                rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
-                mass_hb = (rhoe*vola_hb)
+            # binned aggregate arrays
+            massa_hb = massa_valid[bina_inds==j]
+            vta_hb = vta_valid[bina_inds==j]
+            za_hb = za_valid[bina_inds==j]
+        
+            # number of collisions from statistical mechanics
+            nj = np.sum(parm_hb)+np.sum(aggm_hb)
+            vt_mn = np.mean(np.concatenate((vt_hb, vta_hb)))
+            rad_mn = np.mean(((3.*np.concatenate((vola_hb, massa_hb/rho_agg)))/(4.*np.pi))**(1./3.))
+            tau_bin[j] = 1./(4.*np.pi*nj*nscale/dz*vt_mn*rad_mn**2.)
+            ncol_bin[j] = nj*nscale*(1.-np.exp(-1./tau_bin[j]))
+            nagg_exp = eff_agg*ncol_bin[j]/nscale
+            #print(f'fraction of collisions: {nagg_exp:.1f}')
+        
+            if not isnan(nagg_exp):
+                # random sampling for fractional expected # of collisions
+                nagg_sam = int(int(nagg_exp)+np.heaviside(nagg_exp-np.random.rand(), 1.))
+                if nagg_sam>0:
+                    # get pristine physical properties
+                    a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
+                    c = a*volc_hb/vola_hb
+                    rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
+                    mass_hb = (rhoe*vola_hb)
                 
-                # collate pristine and aggregate arrays
-                mass_comb = np.concatenate((mass_hb, massa_hb))
-                z_comb = np.concatenate((z_hb, za_hb))
-                comb_hb = np.concatenate((parm_hb, aggm_hb))
-                print(len(comb_hb), len(parm_hb), len(aggm_hb))                
+                    # collate pristine and aggregate arrays
+                    mass_comb = np.concatenate((mass_hb, massa_hb))
+                    z_comb = np.concatenate((z_hb, za_hb))
+                    comb_hb = np.concatenate((parm_hb, aggm_hb))
                                 
-                # favor larger sizes as the "aggregator", random for "aggregated"
-                ncomb_hb = np.sum(comb_hb)
-                ind_sample = np.random.choice(np.arange(ncomb_hb), size=(5,nagg_sam))
-                mass_sample = mass_comb[ind_sample]
-                maxind_mass = np.argmax(mass_sample, axis=0)
-                ind_agtr = np.squeeze(ind_sample[maxind_mass,:], axis=0)
-                comb_hb[ind_agtr] = 0
+                    # favor larger sizes as the "aggregator", random for "aggregated"
+                    ncomb_hb = np.sum(comb_hb)
+                    ind_sample = np.random.choice(np.arange(ncomb_hb), size=(5,nagg_sam))
+                    mass_sample = mass_comb[ind_sample]
+                    maxind_mass = np.argmax(mass_sample, axis=0)
+                    ind_agtr = ind_sample[maxind_mass,np.arange(nagg_sam)]
+                    comb_hb[ind_agtr] = 0
                 
-                ind_agtd = np.random.choice(np.arange(ncomb_hb)[comb_hb], size=nagg_sam)
-                comb_hb[ind_agtd] = 0
+                    ind_agtd = np.random.choice(np.arange(ncomb_hb)[comb_hb], size=(nagg_sam))
+                    comb_hb[ind_agtd] = 0
 
-                # calculate aggregate physical properties from constituents
-                arnd_ind = np.random.choice(np.arange(nagg_max)[aggm==0], size=nagg_sam)
-                mass_agg[arnd_ind] = mass_comb[ind_agtr]+mass_comb[ind_agtd]
-                aggm[arnd_ind] = 1
-                zagg[arnd_ind] = np.random.rand()*dz+ze[j]
+                    # calculate aggregate physical properties from constituents
+                    arnd_ind = np.random.choice(np.arange(nagg_max)[aggm==0], size=nagg_sam)
+                    mass_agg[arnd_ind] = mass_comb[ind_agtr]+mass_comb[ind_agtd]
+                    aggm[arnd_ind] = 1
+                    zagg[arnd_ind] = np.random.rand()*dz+ze[j]
                 
-                # update original pristine and aggregate mask arrays
-                parm_hb = comb_hb[:len(parm_hb)]
-                aggm_hb = comb_hb[len(parm_hb):]
-                #parm_valid[bin_inds==j] = parm_hb
-                #aggm_valid[bina_inds==j] = aggm_hb
-                parm[pinds_hb] = parm_hb
-                aggm[ainds_hb] = aggm_hb
-                #print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
+                    # update original pristine and aggregate mask arrays
+                    parm_hb = comb_hb[:len(parm_hb)]
+                    aggm_hb = comb_hb[len(parm_hb):]
+                    #parm_valid[bin_inds==j] = parm_hb
+                    #aggm_valid[bina_inds==j] = aggm_hb
+                    parm[pinds_hb] = parm_hb
+                    aggm[ainds_hb] = aggm_hb
+                    #print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
 
     # update pristine array mask            
     #parm[parm] = parm_valid
@@ -317,7 +317,7 @@ t2d, z2d = np.meshgrid(t, z, indexing='ij')
 tcnt2d, zcnt2d = np.meshgrid(0.5*(t[1:]+t[:-1]), 0.5*(z[1:]+z[:-1]), indexing='ij')
 
 # mask data by reflectivity
-zh_thresh =  -40.
+zh_thresh =  -30.
 zdr = np.ma.masked_where(zh<zh_thresh, zdr)
 kdp = np.ma.masked_where(zh<zh_thresh, kdp)
 rhohv = np.ma.masked_where(zh<zh_thresh, rhohv)
@@ -331,7 +331,7 @@ fmt_int = mpl.ticker.StrMethodFormatter('{x:.0f}')
 # zh
 #---------------------------------------------------------------
 ax = fig.add_subplot(5,1,1)
-plt.pcolormesh(t2d, z2d, zh, cmap=zh_map, vmin=-40., vmax=20.)
+plt.pcolormesh(t2d, z2d, zh, cmap=zh_map, vmin=-30., vmax=30.)
 cs2 = ax.contour(tcnt2d, zcnt2d, tmpk2d-273.15, levels=[-20.,-15.,-10.], linewidths=2., linestyles='-.', colors='k')
 cs3 = ax.contour(tcnt2d, zcnt2d, si2d*100., levels=[5.,10.,15.], linewidths=2., linestyles='--', colors='b')
 
@@ -344,7 +344,7 @@ ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 
-cb = plt.colorbar()
+cb = plt.colorbar(format='%.0f')
 cb.set_label('(dBZ)')
 
 # zdr
@@ -364,7 +364,7 @@ ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 
-cb = plt.colorbar()
+cb = plt.colorbar(format='%.1f')
 cb.set_label('(dB)')
 
 # kdp
@@ -377,7 +377,7 @@ ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 
-cb = plt.colorbar()
+cb = plt.colorbar(format='%.1f')
 cb.set_label('(deg/km)')
 
 #plt.scatter(tagg2[:,::10], zagg2[:,::10], c='k', s=10., alpha=0.3)
@@ -393,12 +393,12 @@ ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 
-cb = plt.colorbar()
+cb = plt.colorbar(format='%.2f')
 
 # mdv
 #---------------------------------------------------------------
 ax = fig.add_subplot(5,1,5)
-plt.pcolormesh(t2d, z2d, mdv, cmap='Spectral_r', vmin=-0.5, vmax=0.)
+plt.pcolormesh(t2d, z2d, mdv, cmap='Spectral_r', vmin=-1., vmax=0.)
 ax.set_xlabel('time (seconds)', fontsize=16)
 ax.set_ylabel('height (m)', fontsize=16)
 ax.set_title('MDV', fontsize=18, x=0., y=1.02, ha='left')
@@ -406,7 +406,7 @@ ax.xaxis.set_major_formatter(fmt_int)
 ax.yaxis.set_major_formatter(fmt_int)
 ax.set_ylim([0.,3000.])
 
-cb = plt.colorbar()
+cb = plt.colorbar(format='%.1f')
 cb.set_label('(m/s)')
 
 #plt.subplots_adjust(wspace=0.2, hspace=0.3)
