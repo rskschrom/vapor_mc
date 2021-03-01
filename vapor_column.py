@@ -115,6 +115,8 @@ for i in range(nt-1):
     volc_new = volc+dt*dvcdt
     vt = mi.fall_speed(vola, volc)
     z = z-dt*vt
+    vola = vola_new
+    volc = volc_new
 
     # remove very small particles for negative si
     parm[(si<0.)&(vola_new<1.e-16)] = 0
@@ -125,15 +127,14 @@ for i in range(nt-1):
     rhoe = mi.rhodep(a, 0.1, 0.4, 0.6, 0.7, 920.)
     lea = lea+np.sum(vola[z<0.]*rhoe)/25.4
     parm[z<0.] = 0
+    
+    # get bin indices for particles height
+    bin_inds = np.digitize(z[parm], ze)-1
+    bina_inds = np.digitize(zagg[aggm], ze)-1
 
-    # advance to next step
-    vola = vola_new
-    volc = volc_new
-
-    # adjust thermodynamic environment (binned appx.)
+    # get unmasked slices of pristine arrays
     vola_valid = vola[parm]
     volc_valid = volc[parm]
-    
     vt_valid = vt[parm]
     dmdt_valid = dmdt[parm]
     tmpk_valid = tmpk[parm]
@@ -141,70 +142,118 @@ for i in range(nt-1):
     z_valid = z[parm]
     pres_valid = pres[parm]
     parm_valid = parm[parm]
-    bin_inds = np.digitize(z[parm], ze)-1
+    pinds_valid = np.arange(npar_max)[parm]
     
-    mass_ch_bin = np.zeros([nbin])
+    # get unmasked slices of aggregate arrays
+    za_valid = zagg[aggm]
+    massa_valid = mass_agg[aggm]
+    aggm_valid = aggm[aggm]
+    vta_valid = mi.fall_speed(massa_valid/rho_agg, massa_valid/rho_agg)
+    ainds_valid = np.arange(nagg_max)[aggm]
+    
+    # loop over height bins to adjust thermo and do aggregation
     for j in range(nbin):
+        # get pristine thermodynamic array slices within height bin
+        dmdt_hb = dmdt_valid[bin_inds==j]
+        tmpk_hb = tmpk_valid[bin_inds==j]
+        pres_hb = pres_valid[bin_inds==j]
+        si_hb = si_valid[bin_inds==j]
+        
+        # particle array mask indices
+        pinds_hb = pinds_valid[bin_inds==j]
+        ainds_hb = ainds_valid[bina_inds==j]
+    
         # adjust temp and humidity based on vapor growth
         rho_vap = th.svp_ice(tmpk_bin[j])*(si_bin[j]+1.)/(462.*tmpk_bin[j])
-        mass_change = np.sum(dmdt_valid[bin_inds==j]*nscale*dt/dz)
+        mass_change = np.sum(dmdt_hb*nscale*dt/dz)
         
         new_rho_vap = rho_vap-mass_change
         tmpk_bin[j] = tmpk_bin[j]+th.lheat_sub(tmpk_bin[j])/1.8e-2*mass_change/(pres_bin[j]/(287.*tmpk_bin[j]))/1004.
         si_bin[j] = 462.*tmpk_bin[j]*new_rho_vap/th.svp_ice(tmpk_bin[j])-1.
 
         # set all particles within bin to new bin thermo state
-        tmpk_valid[bin_inds==j] = tmpk_bin[j]
-        si_valid[bin_inds==j] = si_bin[j]
-        pres_valid[bin_inds==j] = pres_bin[j]
-        tmpk[parm] = tmpk_valid
-        si[parm] = si_valid
-        pres[parm] = pres_valid
+        tmpk_hb = tmpk_bin[j]
+        si_hb = si_bin[j]
+        pres_hb = pres_bin[j]
+        tmpk[pinds_hb] = tmpk_hb
+        si[pinds_hb] = si_hb
+        pres[pinds_hb] = pres_hb
         
-        # collection of pristine by pristine
-        nj = np.sum(parm_valid[bin_inds==j])
-        vt_mn = np.mean(vt_valid[bin_inds==j])
-        rad_mn = np.mean(((3.*vola_valid[bin_inds==j])/(4.*np.pi))**(1./3.))
+        # aggregation
+        #---------------------------------------------------
+        # binned pristine arrays
+        vola_hb = vola_valid[bin_inds==j]
+        volc_hb = volc_valid[bin_inds==j]
+        vt_hb = vt_valid[bin_inds==j]
+        z_hb = z_valid[bin_inds==j]
+        parm_hb = parm_valid[bin_inds==j]
+        
+        # get pristine physical properties
+        a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
+        c = a*volc_hb/vola_hb
+        rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
+        mass_par = (rhoe*vola_hb)
+        
+        # binned aggregate arrays
+        massa_hb = massa_valid[bina_inds==j]
+        vta_hb = vta_valid[bina_inds==j]
+        za_hb = za_valid[bina_inds==j]
+        aggm_hb = aggm_valid[bina_inds==j]
+        
+        # number of collisions from statistical mechanics
+        nj = np.sum(parm_hb)+np.sum(aggm_hb)
+        vt_mn = np.mean(np.concatenate((vt_hb, vta_hb)))
+        rad_mn = np.mean(((3.*np.concatenate((vola_hb, massa_hb/rho_agg)))/(4.*np.pi))**(1./3.))
         tau_bin[j] = 1./(4.*np.pi*nj*nscale/dz*vt_mn*rad_mn**2.)
         ncol_bin[j] = nj*nscale*(1.-np.exp(-1./tau_bin[j]))
         nagg_exp = eff_agg*ncol_bin[j]/nscale
+        print(f'fraction of collisions: {nagg_exp:.1f}')
         
         if not isnan(nagg_exp):
             # random sampling for fractional expected # of collisions
             nagg_sam = int(int(nagg_exp)+np.heaviside(nagg_exp-np.random.rand(), 1.))
             if nagg_sam>0:
-                # add aggregates to array
+                # get pristine physical properties
+                a = 1.e3*(3.*vola_hb/(4.*np.pi*volc_hb/vola_hb))**(1./3.)
+                c = a*volc_hb/vola_hb
+                rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
+                mass_hb = (rhoe*vola_hb)
+                
+                # collate pristine and aggregate arrays
+                mass_comb = np.concatenate((mass_hb, massa_hb))
+                z_comb = np.concatenate((z_hb, za_hb))
+                comb_hb = np.concatenate((parm_hb, aggm_hb))
+                print(len(comb_hb), len(parm_hb), len(aggm_hb))                
+                                
+                # favor larger sizes as the "aggregator", random for "aggregated"
+                ncomb_hb = np.sum(comb_hb)
+                ind_sample = np.random.choice(np.arange(ncomb_hb), size=(5,nagg_sam))
+                mass_sample = mass_comb[ind_sample]
+                maxind_mass = np.argmax(mass_sample, axis=0)
+                ind_agtr = np.squeeze(ind_sample[maxind_mass,:], axis=0)
+                comb_hb[ind_agtr] = 0
+                
+                ind_agtd = np.random.choice(np.arange(ncomb_hb)[comb_hb], size=nagg_sam)
+                comb_hb[ind_agtd] = 0
+
+                # calculate aggregate physical properties from constituents
                 arnd_ind = np.random.choice(np.arange(nagg_max)[aggm==0], size=nagg_sam)
+                mass_agg[arnd_ind] = mass_comb[ind_agtr]+mass_comb[ind_agtd]
                 aggm[arnd_ind] = 1
                 zagg[arnd_ind] = np.random.rand()*dz+ze[j]
                 
-                # choose pristine crystals to aggregate
-                parm_bin = parm_valid[bin_inds==j]
-                vola_bin = vola_valid[bin_inds==j]
-                volc_bin = volc_valid[bin_inds==j]
-                a = 1.e3*(3.*vola_bin/(4.*np.pi*volc_bin/vola_bin))**(1./3.)
-                c = a*volc_bin/vola_bin
-                rhoe = mi.rhoeff(a, 0.1, 0.4, 0.6, 0.7, 920.)
-                mass_par = (rhoe*vola_bin)
-                
-                # favor larger sizes as the "aggregator", random for "aggregated"
-                npr_bin = np.sum(parm_bin)
-                pind_sample = np.random.choice(np.arange(npr_bin), size=(5,nagg_sam))
-                mass_sample = mass_par[pind_sample]
-                maxind_mass = np.argmax(mass_sample, axis=0)
-                pind_agtr = np.squeeze(pind_sample[maxind_mass,:], axis=0)
-                parm_bin[pind_agtr] = 0
-                
-                pind_agtd = np.random.choice(np.arange(npr_bin)[parm_bin], size=(nagg_sam))
-                parm_bin[pind_agtd] = 0
-                parm_valid[bin_inds==j] = parm_bin
-                
-                # calculate aggregate physical properties from pristines
-                mass_agg[arnd_ind] = mass_par[pind_agtr]+mass_par[pind_agtd]
-                print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
-    
+                # update original pristine and aggregate mask arrays
+                parm_hb = comb_hb[:len(parm_hb)]
+                aggm_hb = comb_hb[len(parm_hb):]
+                #parm_valid[bin_inds==j] = parm_hb
+                #aggm_valid[bina_inds==j] = aggm_hb
+                parm[pinds_hb] = parm_hb
+                aggm[ainds_hb] = aggm_hb
+                #print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
+
     # update pristine array mask            
-    parm[parm] = parm_valid
+    #parm[parm] = parm_valid
+    #aggm[aggm] = aggm_valid
     
     # aggregate sedimentation (simple for now)
     vt_agg = mi.fall_speed(mass_agg/rho_agg, mass_agg/rho_agg)
@@ -226,10 +275,10 @@ for i in range(nt-1):
         si2d[pi,:] = si_bin
         vt_mn = np.mean(vt_valid[bin_inds==j])
         rad_mn = np.mean(((3.*vola_valid[bin_inds==j])/(4.*np.pi))**(1./3.))
-        tau[pi,:] = tau_bin
-        ncol[pi,:] = ncol_bin
-        zagg2[pi,:] = zagg
-        tagg2[pi,:] = 1.*i
+        #tau[pi,:] = tau_bin
+        #ncol[pi,:] = ncol_bin
+        #zagg2[pi,:] = zagg
+        #tagg2[pi,:] = 1.*i
         
     # nucleate new ice
     res = 10.**np.random.multivariate_normal([-13.,-13.],
@@ -306,8 +355,8 @@ plt.pcolormesh(t2d, z2d, zdr, cmap=zdr_map, vmin=-2.4, vmax=6.9)
 tau = np.ma.masked_invalid(tau)
 ncol = np.ma.masked_invalid(ncol)
 
-cs2 = ax.contour(tcnt2d, zcnt2d, ncol/nscale, levels=[0.1,0.3,0.5,0.7,0.9], linewidths=2., linestyles='--', colors='k')
-ax.clabel(cs2, inline=1, fontsize=12, fmt='%3.f')
+#cs2 = ax.contour(tcnt2d, zcnt2d, ncol/nscale, levels=[0.1,0.3,0.5,0.7,0.9], linewidths=2., linestyles='--', colors='k')
+#ax.clabel(cs2, inline=1, fontsize=12, fmt='%3.f')
 
 ax.set_ylabel('height (m)', fontsize=16)
 ax.set_title('$Z_{DR}$', fontsize=18, x=0., y=1.02, ha='left')
