@@ -9,6 +9,7 @@ from init import interp_sounding
 import matplotlib as mpl
 import matplotlib.colors as cm
 import matplotlib.pyplot as plt
+import datetime
 
 # function for creating color map
 def createCmap(mapname):
@@ -19,37 +20,49 @@ def createCmap(mapname):
     fil.close()
     return cmap
 
-# set model run parameters
-nt = 5400
-nbin = 31
-npar_max = 250000
-npar_init = 100000
-nagg_max = 50000
+# config parameters for each case
+config = {}
+config['20180304_2'] = {'z0':2000.,'zvar':300.,'eff_agg':0.05,'rho_agg':300.,'zoffs':3800.,
+                        'npar_init':10,'nscale':50000.}
+config['20180223_4'] = {'z0':1200.,'zvar':500.,'eff_agg':0.1,'rho_agg':300.,'zoffs':1500.,
+                        'npar_init':20,'nscale':20000.}
+case = '20180304_2'
 
-nscale = 1000.
+# set fixed model run parameters
+nt = 5400
+nbin = 41
+npar_max = 50000
+nagg_max = 20000
 dt = 1.
 dz = 100.
 ze = np.arange(nbin+1)*dz
 
-# set radar parameters
-wavl = 32.1
+# set fixed radar parameters
+wavl = 22.1
 k = 2.*np.pi/wavl
 diel = 3.17+1j*0.009
 bval = 51.
 rad_freq = 20
 nprof = int(nt/rad_freq)
 
+# precalculate aggregate scattering coefficients
+fr_name = 'ku'
+bval_agg = 3.
+acoeffs, msum = fo.agg_coeffs(fr_name, bval_agg)
+
 # set initial particle properties
-z0 = 2500.
-zvar = 100.
+npar_init = config[case]['npar_init']
+nscale = config[case]['nscale']
+z0 = config[case]['z0']
+zvar = config[case]['zvar']
+rho_agg = config[case]['rho_agg']
+eff_agg = config[case]['eff_agg']
+
 vola = np.zeros([npar_max])
 volc = np.zeros([npar_max])
 z = np.zeros([npar_max])
 zagg = np.zeros([nagg_max])
 mass_agg = np.zeros([nagg_max])
-
-rho_agg = 100.
-eff_agg = 0.3
 
 tmpk = np.full([npar_max], 258.)
 si = np.full([npar_max], 0.15)
@@ -61,9 +74,11 @@ parm[:npar_init] = 1
 aggm = np.zeros([nagg_max], dtype=np.bool_)
 
 # randomly sample initial particle properties
-res = 10.**np.random.multivariate_normal([-13.5,-13.5],
-                                          [[0.2,0.0],
-                                           [0.0,0.2]], size=(npar_init))
+min_lvol = -13.
+vol_var = 0.2
+res = 10.**np.random.multivariate_normal([min_lvol,min_lvol],
+                                          [[vol_var,0.0],
+                                           [0.0,vol_var]], size=(npar_init))
 vola[:npar_init] = res[:,0]
 volc[:npar_init] = res[:,1]
 z[:npar_init] = np.random.normal(z0, zvar, size=npar_init)
@@ -91,10 +106,8 @@ tmpk2d = np.empty([nprof,nbin])
 si2d = np.empty([nprof,nbin])
 
 # set initial thermodynamic state from sounding
-#fsnd = 'obs/sounding_20180223_4.txt'
-fsnd = 'obs/sounding_20180304_2.txt'
-#zoffs = 1000.
-zoffs = 3800.
+fsnd = f'obs/sounding_{case}.txt'
+zoffs = config[case]['zoffs']
 pres_bin, tmpk_bin, si_bin = interp_sounding(fsnd, ze+zoffs)
 
 # set conditions at each particle
@@ -104,6 +117,7 @@ for j in range(nbin):
     pres[:npar_init][bin_inds==j] = pres_bin[j]
     tmpk[:npar_init][bin_inds==j] = tmpk_bin[j]
     si[:npar_init][bin_inds==j] = si_bin[j]
+    print(ze[j]+dz/2.+zoffs, tmpk_bin[j])
 
 # integrate model
 for i in range(nt-1):
@@ -227,7 +241,7 @@ for i in range(nt-1):
                                 
                     # favor larger sizes as the "aggregator", random for "aggregated"
                     ncomb_hb = np.sum(comb_hb)
-                    ind_sample = np.random.choice(np.arange(ncomb_hb), size=(5,nagg_sam))
+                    ind_sample = np.random.choice(np.arange(ncomb_hb), size=(10,nagg_sam))
                     mass_sample = mass_comb[ind_sample]
                     maxind_mass = np.argmax(mass_sample, axis=0)
                     ind_agtr = ind_sample[maxind_mass,np.arange(nagg_sam)]
@@ -250,10 +264,6 @@ for i in range(nt-1):
                     parm[pinds_hb] = parm_hb
                     aggm[ainds_hb] = aggm_hb
                     #print(mass_agg[arnd_ind], mass_par[pind_agtr], mass_par[pind_agtd])
-
-    # update pristine array mask            
-    #parm[parm] = parm_valid
-    #aggm[aggm] = aggm_valid
     
     # aggregate sedimentation (simple for now)
     vt_agg = mi.fall_speed(mass_agg/rho_agg, mass_agg/rho_agg)
@@ -267,10 +277,11 @@ for i in range(nt-1):
         par_props = [vola[parm], volc[parm], z[parm], vt[parm]]
         agg_props = [mass_agg[aggm], zagg[aggm], vt_agg[aggm], rho_agg]
         mass_valid = mass_agg[aggm]
-        zh[pi,:], zdr[pi,:], kdp[pi,:], rhohv[pi,:], mdv[pi,:] = fo.radar_agg(par_props, agg_props,
-                                                                              wavl, diel, bval,
-                                                                              ze, nscale,
-                                                                              pd_coeffs, ph_coeffs)
+        zh[pi,:], zdr[pi,:], kdp[pi,:], rhohv[pi,:], mdv[pi,:] = fo.radar_column(par_props, agg_props,
+                                                                                 wavl, diel, bval,
+                                                                                 ze, nscale,
+                                                                                 pd_coeffs, ph_coeffs,
+                                                                                 acoeffs, msum, bval_agg)
         tmpk2d[pi,:] = tmpk_bin
         si2d[pi,:] = si_bin
         vt_mn = np.mean(vt_valid[bin_inds==j])
@@ -281,15 +292,15 @@ for i in range(nt-1):
         #tagg2[pi,:] = 1.*i
         
     # nucleate new ice
-    res = 10.**np.random.multivariate_normal([-13.,-13.],
-                                              [[0.2,0.0],
-                                               [0.0,0.2]], size=(1))
-    rnd_ind = np.random.choice(np.arange(npar_max)[parm==0])
+    res = 10.**np.random.multivariate_normal([min_lvol,min_lvol],
+                                          [[vol_var,0.0],
+                                           [0.0,vol_var]], size=(npar_init))
+    rnd_ind = np.random.choice(np.arange(npar_max)[parm==0], size=(npar_init))
     vola[rnd_ind] = res[:,0]
     volc[rnd_ind] = res[:,1]
-    z[rnd_ind] = np.random.normal(z0, zvar, size=1)
+    z[rnd_ind] = np.random.normal(z0, zvar, size=(npar_init))
     parm[rnd_ind] = 1
-    bins_new = np.digitize(z[rnd_ind], ze)-1
+    bins_new = np.minimum(np.digitize(z[rnd_ind], ze)-1, nbin-1)
     tmpk[rnd_ind] = tmpk_bin[bins_new]
     si[rnd_ind] = si_bin[bins_new]
 
@@ -301,7 +312,7 @@ mpl.rc('font',**{'family':'sans-serif',
                  'size':18})
 mpl.rc('text', usetex=True)
 
-fig = plt.figure(figsize=(12,12))
+fig = plt.figure(figsize=(12,16))
 
 # color map stuff
 zh_map = createCmap('zh2_map')
@@ -312,9 +323,11 @@ vel_map = createCmap('vel2_map')
 
 # coordinates
 t = np.arange(nprof+1)*rad_freq*dt
-z = np.arange(nbin+1)*dz
+z = np.arange(nbin+1)*dz+zoffs
 t2d, z2d = np.meshgrid(t, z, indexing='ij')
 tcnt2d, zcnt2d = np.meshgrid(0.5*(t[1:]+t[:-1]), 0.5*(z[1:]+z[:-1]), indexing='ij')
+zmin = 0.
+zmax = np.max(z)
 
 # mask data by reflectivity
 zh_thresh =  -30.
@@ -333,16 +346,16 @@ fmt_int = mpl.ticker.StrMethodFormatter('{x:.0f}')
 ax = fig.add_subplot(5,1,1)
 plt.pcolormesh(t2d, z2d, zh, cmap=zh_map, vmin=-30., vmax=30.)
 cs2 = ax.contour(tcnt2d, zcnt2d, tmpk2d-273.15, levels=[-20.,-15.,-10.], linewidths=2., linestyles='-.', colors='k')
-cs3 = ax.contour(tcnt2d, zcnt2d, si2d*100., levels=[5.,10.,15.], linewidths=2., linestyles='--', colors='b')
+cs3 = ax.contour(tcnt2d, zcnt2d, si2d*100., levels=[0.,5.,10.,15.], linewidths=2., linestyles='--', colors='b')
 
 ax.clabel(cs2, inline=1, fontsize=12, fmt='%3.0f')
 ax.clabel(cs3, inline=1, fontsize=12, fmt='%2.0f')
 
 ax.set_ylabel('height (m)', fontsize=16)
-ax.set_title('$Z_{H}$', fontsize=18, x=0., y=1.02, ha='left')
+ax.set_title('$\sf{Z_{H}}$', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
-ax.set_ylim([0.,3000.])
+ax.set_ylim([zmin,zmax])
 
 cb = plt.colorbar(format='%.0f')
 cb.set_label('(dBZ)')
@@ -359,10 +372,10 @@ ncol = np.ma.masked_invalid(ncol)
 #ax.clabel(cs2, inline=1, fontsize=12, fmt='%3.f')
 
 ax.set_ylabel('height (m)', fontsize=16)
-ax.set_title('$Z_{DR}$', fontsize=18, x=0., y=1.02, ha='left')
+ax.set_title('$\sf{Z_{DR}}$', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
-ax.set_ylim([0.,3000.])
+ax.set_ylim([zmin,zmax])
 
 cb = plt.colorbar(format='%.1f')
 cb.set_label('(dB)')
@@ -372,10 +385,10 @@ cb.set_label('(dB)')
 ax = fig.add_subplot(5,1,3)
 plt.pcolormesh(t2d, z2d, kdp, cmap=kdp_map, vmin=-0.8, vmax=2.3)
 ax.set_ylabel('height (m)', fontsize=16)
-ax.set_title('$K_{DP}$', fontsize=18, x=0., y=1.02, ha='left')
+ax.set_title('$\sf{K_{DP}}$', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
-ax.set_ylim([0.,3000.])
+ax.set_ylim([zmin,zmax])
 
 cb = plt.colorbar(format='%.1f')
 cb.set_label('(deg/km)')
@@ -388,10 +401,10 @@ ax = fig.add_subplot(5,1,4)
 plt.pcolormesh(t2d, z2d, rhohv, cmap=rhv_map, vmin=0.71, vmax=1.05)
 #ax.set_xlabel('time (seconds)', fontsize=16)
 ax.set_ylabel('height (m)', fontsize=16)
-ax.set_title('$\\rho_{HV}$', fontsize=18, x=0., y=1.02, ha='left')
+ax.set_title('$\sf{\\rho_{HV}}$', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_null)
 ax.yaxis.set_major_formatter(fmt_int)
-ax.set_ylim([0.,3000.])
+ax.set_ylim([zmin,zmax])
 
 cb = plt.colorbar(format='%.2f')
 
@@ -404,10 +417,15 @@ ax.set_ylabel('height (m)', fontsize=16)
 ax.set_title('MDV', fontsize=18, x=0., y=1.02, ha='left')
 ax.xaxis.set_major_formatter(fmt_int)
 ax.yaxis.set_major_formatter(fmt_int)
-ax.set_ylim([0.,3000.])
+ax.set_ylim([zmin,zmax])
 
-cb = plt.colorbar(format='%.1f')
+cb = plt.colorbar(ticks=[-1.,-0.8,-0.6,-0.4,-0.2,0.], format='%.1f')
 cb.set_label('(m/s)')
 
 #plt.subplots_adjust(wspace=0.2, hspace=0.3)
-plt.savefig(f'time_height_vapor_alt.png', bbox_inches='tight')
+# create title
+dt = datetime.datetime.strptime(case.split('_')[0], '%Y%m%d')
+date = f'{dt.day:d} {dt.strftime("%b")} {dt.year:d}'
+
+plt.suptitle(f'{date} - {fr_name.capitalize()}-band simulations', y=0.92)
+plt.savefig(f'time_height_{case}.png', bbox_inches='tight')

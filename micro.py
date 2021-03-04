@@ -13,8 +13,7 @@ def igr(tmpk):
                               lambda tmpc: 0.28*(-7.-tmpc)/8.+2.1*(tmpc+15.)/8.,
                               lambda tmpc: 2.1*(-4.-tmpc)/3.+0.75*(tmpc+7.)/3.,
                               lambda tmpc: 0.75*(0.-tmpc)/4.+1.*(tmpc+4.)/4., 1.])
-    #igr = np.piecewise(tmpc, [tmpc<-30.,(tmpc>=-30)&(tmpc<-20.),(tmpc>=-20)&(tmpc<=0.),tmpc>0.],
-    #                         [1.1,0.8,0.5,1.])
+
     return igr
 
 # fall speed
@@ -26,8 +25,8 @@ def fall_speed(vola, volc):
 
     area[vola>=volc] = np.pi*a[vola>=volc]**2.
     area[vola<volc] = np.pi*a[vola<volc]*c[vola<volc]
-    av = 0.6
-    bv = 0.3
+    av = 0.7
+    bv = 0.2
     #vt = av*(mass/(area*rhoe/920.))**bv
     vt = av*(920.*vola/area)**bv
     return vt
